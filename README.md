@@ -1,4 +1,5 @@
 # Simple explaination
+## NOTE ONLY PROCESSES THE FILES 24 HRS OR OLDER
 The integrated code workflow is a **three-step automated organization process** that uses the **Gemini AI Agent** for smart decision-making:
 
 1.  **Core Sort (Deterministic & AI Fallback) 📂:** The script filters **old files** from your Downloads. It moves files based on **extension rules** (e.g., `.zip` $\rightarrow$ Archives). If an extension is **unknown**, the AI Agent is called to classify it and **update the map** for future runs (Self-Learning). Code files are also analyzed by the AI for **project classification**.
