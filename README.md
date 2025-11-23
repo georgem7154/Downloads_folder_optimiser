@@ -1,4 +1,5 @@
 # Simple explaination
+<img width="708" height="741" alt="image" src="https://github.com/user-attachments/assets/48d586bd-c508-4ad8-bce0-bfbacabad675" />
 ## NOTE ONLY PROCESSES THE FILES 24 HRS BY DEFAULT ADDED OPTION FOR ALL FILES
 The integrated code workflow is a **three-step automated organization process** that uses the **Gemini AI Agent** for smart decision-making:
 
