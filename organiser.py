@@ -24,7 +24,8 @@ RETRY_DELAY = 10
 # Dynamic paths resolved relative to the user's home directory
 DOWNLOADS_DIR = Path.home() / "Downloads"
 ARCHIVE_DIR = DOWNLOADS_DIR / "Organized_Archive"
-EXTENSION_MAP_FILE = DOWNLOADS_DIR / "extension_map.json"
+# UPDATED: Extension map is now inside the archive folder
+EXTENSION_MAP_FILE = ARCHIVE_DIR / "extension_map.json"
 CONFIG_FILE = Path.home() / ".file_organizer_config.txt" # Hidden file for API Key persistence
 
 # Image Renamer specific constants
@@ -116,6 +117,9 @@ def load_extension_map() -> dict:
         "Video": [".mp4", ".mov", ".mkv", ".avi"],
         "Exclusions": [".temp", ".lock", "README.md", "desktop.ini"]
     }
+    
+    # Ensure the archive directory exists before looking for the map file
+    ARCHIVE_DIR.mkdir(exist_ok=True)
     
     try:
         if EXTENSION_MAP_FILE.exists():
@@ -344,11 +348,11 @@ def classify_pdf_by_image(file_path: Path, existing_subfolders: list[str], log_w
     return None
 
 # =========================================================================
-# III. ORCHESTRATION FUNCTIONS (Renamed to prevent shadowing)
+# III. ORCHESTRATION FUNCTIONS (Modified with Folder Moving Logic)
 # =========================================================================
 
-def organize_downloads(log_widget: scrolledtext.ScrolledText):
-    """The main file sorting logic."""
+def organize_downloads(log_widget: scrolledtext.ScrolledText, process_all_files: bool):
+    """The main file sorting logic, now including moving existing sub-folders."""
     log_message(log_widget, f"\n--- Starting core file sorting: {DOWNLOADS_DIR} ---\n", "info")
     
     if not DOWNLOADS_DIR.exists():
@@ -357,15 +361,40 @@ def organize_downloads(log_widget: scrolledtext.ScrolledText):
 
     EXT_MAP = load_extension_map()
     ARCHIVE_DIR.mkdir(exist_ok=True)
+    
+    # Define the new destination for all folders
+    FOLDERS_DEST_DIR = ARCHIVE_DIR / "Folders"
+    FOLDERS_DEST_DIR.mkdir(exist_ok=True)
+    
     CUTOFF_TIME = datetime.now() - timedelta(hours=24)
     
     exclusion_list = [item.lower() for item in EXT_MAP.get("Exclusions", [])]
     existing_categories = [k for k in EXT_MAP.keys() if k != "Exclusions"]
     
     files_processed = 0
+    folders_processed = 0 # New counter for folders
     
     for item in DOWNLOADS_DIR.iterdir():
-        if item.is_dir() or item.name == ARCHIVE_DIR.name or item.name == EXTENSION_MAP_FILE.name or item.name == CONFIG_FILE.name:
+        
+        # --- FOLDER HANDLING LOGIC ---
+        if item.is_dir():
+            # Skip the main archive, the 'Folders' destination, and other necessary system/config directories
+            if item.name == ARCHIVE_DIR.name or item.name == FOLDERS_DEST_DIR.name:
+                continue
+            
+            try:
+                # Move the folder into the 'Folders' destination directory
+                shutil.move(str(item), str(FOLDERS_DEST_DIR / item.name))
+                log_message(log_widget, f"📂 Moved Folder: {item.name} -> Folders/\n", "success")
+                folders_processed += 1
+            except Exception as e:
+                log_message(log_widget, f"❌ Folder move error with {item.name}: {e}\n", "error")
+            continue
+        # --- END FOLDER HANDLING LOGIC ---
+
+        # Skip specific config files now that we've handled directories
+        # Only check CONFIG_FILE as EXTENSION_MAP_FILE is now inside ARCHIVE_DIR
+        if item.name == CONFIG_FILE.name:
             continue
             
         # 1. Exclusion Check ⛔
@@ -373,24 +402,25 @@ def organize_downloads(log_widget: scrolledtext.ScrolledText):
             log_message(log_widget, f"⛔ Excluded: {item.name}\n", "error")
             continue
             
-        # Check for time-gating
-        file_mod_time = datetime.fromtimestamp(item.stat().st_mtime)
-        if file_mod_time >= CUTOFF_TIME:
-            log_message(log_widget, f"⏰ Recent: {item.name} (Skipping)\n", "info")
-            continue
+        # 2. TIME-GATING CHECK (Conditional based on new checkbox)
+        if not process_all_files:
+            file_mod_time = datetime.fromtimestamp(item.stat().st_mtime)
+            if file_mod_time >= CUTOFF_TIME:
+                log_message(log_widget, f"⏰ Recent: {item.name} (Skipping)\n", "info")
+                continue
             
         log_message(log_widget, f"Processing file: {item.name}\n", "info")
         
         ext = item.suffix.lower()
         destination_folder = None
         
-        # 2. Rule-Based Classification
+        # 3. Rule-Based Classification
         for category, extensions in EXT_MAP.items():
             if ext in extensions:
                 destination_folder = category
                 break
 
-        # 3. Semantic Code Analysis (if classified as 'Code')
+        # 4. Semantic Code Analysis (if classified as 'Code')
         if destination_folder == "Code":
             code_info = analyze_code_content(item, log_widget)
             if code_info and code_info.suggested_folder:
@@ -400,7 +430,7 @@ def organize_downloads(log_widget: scrolledtext.ScrolledText):
                 final_folder_path.mkdir(parents=True, exist_ok=True)
                 log_message(log_widget, f"  -> CLASSIFIED AS: {semantic_folder}\n", "success")
 
-        # 4. Agent-Based Extension Fallback (if still unclassified)
+        # 5. Agent-Based Extension Fallback (if still unclassified)
         elif destination_folder is None:
             recommendation = get_folder_recommendation(ext, existing_categories, log_widget)
             
@@ -410,15 +440,15 @@ def organize_downloads(log_widget: scrolledtext.ScrolledText):
             else:
                 destination_folder = "Unsorted_Agent_Failed"
 
-        # 5. Final Move
+        # 6. Final Move (for files)
         if destination_folder:
             if isinstance(destination_folder, Path):
                  target_dir = ARCHIVE_DIR.joinpath(destination_folder)
                  folder_name_for_log = destination_folder.as_posix()
             else:
-                 target_dir = ARCHIVE_DIR / destination_folder
-                 folder_name_for_log = destination_folder
-                 target_dir.mkdir(parents=True, exist_ok=True) 
+                target_dir = ARCHIVE_DIR / destination_folder
+                folder_name_for_log = destination_folder
+                target_dir.mkdir(parents=True, exist_ok=True) 
 
             try:
                 shutil.move(str(item), str(target_dir / item.name))
@@ -427,7 +457,7 @@ def organize_downloads(log_widget: scrolledtext.ScrolledText):
             except Exception as e:
                 log_message(log_widget, f"❌ Move error with {item.name}: {e}\n", "error")
 
-    log_message(log_widget, f"\n--- Core file sorting complete. {files_processed} files processed. ---\n", "info")
+    log_message(log_widget, f"\n--- Core file sorting complete. {files_processed} files and {folders_processed} folders processed. ---\n", "info")
     return files_processed
 
 def execute_image_renamer(images_folder: Path, log_widget: scrolledtext.ScrolledText, use_delay: bool) -> int:
@@ -436,8 +466,8 @@ def execute_image_renamer(images_folder: Path, log_widget: scrolledtext.Scrolled
     log_message(log_widget, f"\n--- STARTING OPTIONAL IMAGE RENAMER MODULE ---", "image")
 
     if not images_folder.is_dir():
-         log_message(log_widget, f"Target folder not found: {images_folder.name}. Skipping Image Renamer.\n", "error")
-         return 0
+           log_message(log_widget, f"Target folder not found: {images_folder.name}. Skipping Image Renamer.\n", "error")
+           return 0
 
     all_files = [f.name for f in images_folder.iterdir() if f.is_file() and f.name.lower().endswith(IMAGE_EXTENSIONS) and PROCESSED_SUFFIX not in f.name]
     total_eligible_files = len(all_files)
@@ -501,8 +531,8 @@ def execute_pdf_sorter(log_widget: scrolledtext.ScrolledText):
     
     DOCUMENTS_FOLDER = ARCHIVE_DIR / "Documents"
     if not DOCUMENTS_FOLDER.is_dir():
-         log_message(log_widget, f"Target folder not found: {DOCUMENTS_FOLDER.name}. Skipping PDF sorter.\n", "error")
-         return 0
+           log_message(log_widget, f"Target folder not found: {DOCUMENTS_FOLDER.name}. Skipping PDF sorter.\n", "error")
+           return 0
 
     files_processed = 0
     
@@ -557,6 +587,8 @@ class FileOrganizerApp(ctk.CTk):
         self.run_image_renamer_var = tk.BooleanVar(self, value=False) 
         self.run_pdf_sorter_var = tk.BooleanVar(self, value=False) 
         self.use_delay_var = tk.BooleanVar(self, value=True) 
+        # NEW: Variable for time-gating bypass
+        self.process_all_files_var = tk.BooleanVar(self, value=False)
         
         global gemini_client
         gemini_client = None
@@ -618,19 +650,29 @@ class FileOrganizerApp(ctk.CTk):
                         text_color=COLOR_PDF
                         ).pack(side=tk.LEFT, padx=10)
 
+        # NEW CHECKBOX: Process All Files
+        self.process_all_checkbox = ctk.CTkCheckBox(checkbox_frame,
+                        text="⏳ Process All Files (Ignore 24hr limit)",
+                        variable=self.process_all_files_var,
+                        onvalue=True, offvalue=False,
+                        text_color=COLOR_INFO,
+                        state=tk.DISABLED # Starts DISABLED as requested
+                        )
+        self.process_all_checkbox.pack(side=tk.LEFT, padx=10)
+
 
         # ROW 4: Start Button
         self.start_button = ctk.CTkButton(control_frame, text="START ORGANIZATION", command=self.start_processing, 
-                                          fg_color="#15F000", hover_color="#15CC00", 
-                                          font=ctk.CTkFont(size=24, weight="bold"))
+                                             fg_color="#15F000", hover_color="#15CC00", 
+                                             font=ctk.CTkFont(size=24, weight="bold"))
         self.start_button.grid(row=4, column=0, columnspan=3, pady=(10, 20), padx=10, sticky="ew") 
 
         # Log Output
         ctk.CTkLabel(self, text="Processing Log:").grid(row=2, column=0, padx=20, pady=(10, 0), sticky="sw")
         self.log_widget = scrolledtext.ScrolledText(self, wrap=tk.WORD, height=15, state='disabled', 
-                                                    bg=ctk.ThemeManager.theme['CTkEntry']['fg_color'][0], 
-                                                    fg=ctk.ThemeManager.theme['CTkEntry']['text_color'][0],
-                                                    bd=0, relief=tk.FLAT)
+                                                     bg=ctk.ThemeManager.theme['CTkEntry']['fg_color'][0], 
+                                                     fg=ctk.ThemeManager.theme['CTkEntry']['text_color'][0],
+                                                     bd=0, relief=tk.FLAT)
         self.log_widget.grid(row=4, column=0, padx=20, pady=(5, 20), sticky="nsew")
         
         self.log_widget.tag_config('success', foreground=COLOR_SUCCESS, font=('Courier', 10, 'bold'))
@@ -669,7 +711,8 @@ class FileOrganizerApp(ctk.CTk):
         """Opens a dialog to inform the user how to edit the main map file."""
         messagebox.showinfo(
             "Edit Extension Map",
-            f"To edit the main folder categories and extensions, please manually open the configuration file:\n\n{EXTENSION_MAP_FILE}\n\n"
+            # UPDATED DIALOG TEXT
+            f"To edit the main folder categories and extensions, please manually open the configuration file, now located inside the Organized_Archive folder:\n\n{EXTENSION_MAP_FILE}\n\n"
             "Ensure the file remains valid JSON format after editing."
         )
 
@@ -684,10 +727,13 @@ class FileOrganizerApp(ctk.CTk):
             try:
                 gemini_client = genai.Client(api_key=api_key)
                 self.start_button.configure(state=tk.NORMAL, text="START ORGANIZATION (Ready)", fg_color="#15F000", hover_color="#15CC00")
+                self.process_all_checkbox.configure(state=tk.NORMAL) # ENABLE the new checkbox
             except Exception:
                 self.start_button.configure(state=tk.DISABLED, text="START ORGANIZATION (API Key Error)", fg_color=COLOR_ERROR, hover_color="#A93226")
+                self.process_all_checkbox.configure(state=tk.DISABLED) # DISABLE on error
         else:
             self.start_button.configure(state=tk.DISABLED, text="START ORGANIZATION (Enter API Key)", fg_color="gray", hover_color="dim gray")
+            self.process_all_checkbox.configure(state=tk.DISABLED) # DISABLE on empty key
 
 
     def start_processing(self):
@@ -710,30 +756,30 @@ class FileOrganizerApp(ctk.CTk):
         run_renamer = self.run_image_renamer_var.get()
         run_pdf_sorter = self.run_pdf_sorter_var.get()
         use_delay = self.use_delay_var.get()
+        # NEW: Get process all files flag
+        process_all_files = self.process_all_files_var.get()
 
         # Run processing thread with the flags
-        processing_thread = threading.Thread(target=self._run_processing_thread, args=(self.log_widget, run_renamer, run_pdf_sorter, use_delay))
+        processing_thread = threading.Thread(target=self._run_processing_thread, args=(self.log_widget, run_renamer, run_pdf_sorter, use_delay, process_all_files))
         processing_thread.start()
 
-    def _run_processing_thread(self, log_widget, run_renamer: bool, run_pdf_sorter: bool, use_delay: bool):
+    def _run_processing_thread(self, log_widget, run_renamer: bool, run_pdf_sorter: bool, use_delay: bool, process_all_files: bool):
         """Internal function to run the sequential processing: Core Sort -> Renamer -> PDF Sort."""
         total_files_moved = 0
         total_images_renamed = 0
         total_pdfs_sorted = 0
         
         try:
-            # STEP 1: Core File Organization (Sorting and Moving to destination folders)
-            total_files_moved = organize_downloads(log_widget) 
+            # STEP 1: Core File Organization (Passing the new flag)
+            total_files_moved = organize_downloads(log_widget, process_all_files) 
             
             # STEP 2: Optional Image Renaming (Runs on Images folder)
-            if run_renamer: # NO PARENTHESES - Using the boolean argument directly
+            if run_renamer:
                 images_folder = ARCHIVE_DIR / "Images"
-                # CALLING THE RENAMED FUNCTION
                 total_images_renamed = execute_image_renamer(images_folder, log_widget, use_delay) 
                 
             # STEP 3: Optional PDF Sub-Sorting (Runs on Documents folder)
-            if run_pdf_sorter: # NO PARENTHESES - Using the boolean argument directly
-                # CALLING THE RENAMED FUNCTION
+            if run_pdf_sorter: 
                 total_pdfs_sorted = execute_pdf_sorter(log_widget)
 
             final_message = f"Process Complete!\nFiles Organized: {total_files_moved}\nImages Renamed: {total_images_renamed}\nPDFs Sorted: {total_pdfs_sorted}"
